@@ -31,3 +31,10 @@ target_link_libraries(capture
   ${OpenCV_LIBS}
   ${Eigen3_LIBS}
 )
+
+add_executable(stitch src/stitch.cpp)
+target_link_libraries(stitch
+  ${catkin_LIBRARIES}
+  ${OpenCV_LIBS}
+  ${Eigen3_LIBS}
+)
