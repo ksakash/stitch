@@ -295,7 +295,11 @@ cv::Mat changePerspective (cv::Mat& image, imageData& data) {
     return correctedImage;
 }
 
+int count_ = 0;
 void image_cb (const sensor_msgs::ImageConstPtr& msg) {
+    count_++;
+    if (count_ % 40 != 0)
+        return;
     cv_bridge::CvImagePtr cv_ptr;
     try {
         cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);

@@ -19,8 +19,12 @@
 int count = 0;
 std::string dir = "/home/ksakash/Downloads/gazebo_images/images";
 float yaw = 0, pitch = 0, roll = 0;
+std::ofstream f;
 
 void image_cb (const sensor_msgs::ImageConstPtr& msg) {
+    count++;
+    if (count % 40 != 0)
+        return;
     cv_bridge::CvImagePtr cv_ptr;
     try {
         cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
@@ -32,20 +36,10 @@ void image_cb (const sensor_msgs::ImageConstPtr& msg) {
     cv::Mat image = cv_ptr->image;
     std::string image_name = dir + "/" + std::to_string (count) + ".jpg";
     cv::imwrite (image_name, image);
-    std::ofstream f;
-    std::string filename = "/home/ksakash/Downloads/gazebo_images/imageData.txt";
-    f.open (filename);
-
-    if (!f.is_open ()) {
-        std::cout << "error in reading file" << std::endl;
-        return;
-    }
-
     f << std::to_string (count) + ".jpg" << ",0,0,0,"
          << std::to_string (yaw) << "," << std::to_string (pitch)
          << "," << std::to_string (roll) << "\n";
-    count++;
-    f.close ();
+    std::cout << count << std::endl;
 }
 
 void pose_cb (const nav_msgs::Odometry& msg) {
@@ -62,10 +56,20 @@ void pose_cb (const nav_msgs::Odometry& msg) {
 
 int main (int argc, char** argv) {
     ros::init (argc, argv, "capture");
+
+    std::string filename = "/home/ksakash/Downloads/gazebo_images/imageData.txt";
+    f.open (filename);
+
+    if (!f.is_open ()) {
+        std::cout << "error in reading file" << std::endl;
+        return -1;
+    }
+
     ros::NodeHandle nh;
     image_transport::ImageTransport it (nh);
     image_transport::Subscriber img_sub = it.subscribe ("/iris/usb_cam/image_raw", 1, image_cb);
     ros::Subscriber pose_sub = nh.subscribe ("/mavros/odometry/in", 10, pose_cb);
     ros::spin ();
+    f.close ();
     return 0;
 }
