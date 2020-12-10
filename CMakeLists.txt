@@ -11,7 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
 )
 
-find_package(OpenCV REQUIRED)
+find_package(OpenCV 4 REQUIRED)
 find_package (Eigen3 3.3 REQUIRED NO_MODULE)
 
 catkin_package(
@@ -34,6 +34,13 @@ target_link_libraries(capture
 
 add_executable(stitch src/stitch.cpp)
 target_link_libraries(stitch
+  ${catkin_LIBRARIES}
+  ${OpenCV_LIBS}
+  ${Eigen3_LIBS}
+)
+
+add_executable(stitch_no_gpu src/stitch_no_gpu.cpp)
+target_link_libraries(stitch_no_gpu
   ${catkin_LIBRARIES}
   ${OpenCV_LIBS}
   ${Eigen3_LIBS}

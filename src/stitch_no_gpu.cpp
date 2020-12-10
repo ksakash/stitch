@@ -6,12 +6,9 @@
 #include <chrono>
 
 #include <opencv2/opencv.hpp>
-#include <opencv2/core/cuda.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudafeatures2d.hpp>
-#include <opencv2/xfeatures2d/cuda.hpp>
-#include <opencv2/cudaarithm.hpp>
-#include <opencv2/cudawarping.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/features2d.hpp>
+#include <opencv2/xfeatures2d.hpp>
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -28,10 +25,12 @@
 using namespace Eigen;
 using namespace std;
 using namespace std::chrono;
+using namespace cv;
+using namespace cv::xfeatures2d;
 
 float yaw = 0, pitch = 0, roll = 0;
 cv::Mat result;
-cv::cuda::GpuMat prev_mask;
+cv::Mat prev_mask;
 
 struct imageData {
     std::string imageName = "";
@@ -95,54 +94,51 @@ cv::Mat warpPerspectiveWithPadding (const cv::Mat& image, cv::Mat& transformatio
     int yMax_ = (yMax + 0.5);
     cv::Mat translation = (cv::Mat_<double>(3,3) << 1, 0, -xMin_, 0, 1, -yMin_, 0, 0, 1);
     cv::Mat fullTransformation = translation * transformation;
-    cv::cuda::GpuMat result;
-    cv::cuda::GpuMat gpu_img (small_img);
-    cv::cuda::GpuMat gpu_ft (fullTransformation);
-    cv::cuda::warpPerspective (gpu_img, result, fullTransformation,
-                                cv::Size (xMax_-xMin_, yMax_-yMin_));
-    cv::Mat result_ (result.size(), result.type());
-    result.download (result_);
-    return result_;
+    cv::Mat result;
+    cv::warpPerspective (small_img, result, fullTransformation,
+                        cv::Size (xMax_-xMin_, yMax_-yMin_));
+    return result;
 }
 
 cv::Mat combinePair (cv::Mat& img1, cv::Mat& img2) {
 
-    cv::cuda::GpuMat img1_gpu (img1), img2_gpu (img2);
-    cv::cuda::GpuMat img1_gray_gpu, img2_gray_gpu;
+    cv::Mat img1_gray, img2_gray;
 
-    cv::cuda::cvtColor (img1_gpu, img1_gray_gpu, cv::COLOR_BGR2GRAY);
-    cv::cuda::cvtColor (img2_gpu, img2_gray_gpu, cv::COLOR_BGR2GRAY);
+    cout << "combine start" << endl;
 
-    cv::cuda::GpuMat mask1;
-    cv::cuda::GpuMat mask2;
+    cv::cvtColor (img1, img1_gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor (img2, img2_gray, cv::COLOR_BGR2GRAY);
+
+    cout << "converted to gray" << endl;
+
+    cv::Mat mask1;
+    cv::Mat mask2;
 
     if (prev_mask.empty()) {
-        cv::cuda::threshold (img1_gray_gpu, mask1, 1, 255, cv::THRESH_BINARY);
+        cv::threshold (img1_gray, mask1, 1, 255, cv::THRESH_BINARY);
     }
     else {
         mask1 = prev_mask;
     }
-    cv::cuda::threshold (img2_gray_gpu, mask2, 1, 255, cv::THRESH_BINARY);
+    cv::threshold (img2_gray, mask2, 1, 255, cv::THRESH_BINARY);
 
-    cv::Ptr<cv::cuda::SURF_CUDA> detector = cv::cuda::SURF_CUDA::create (1000);
+    cout << "thresholded" << endl;
 
-    cv::cuda::GpuMat keypoints1_gpu, descriptors1_gpu;
-    detector->detectWithDescriptors (img1_gray_gpu, mask1,
-                                    keypoints1_gpu, descriptors1_gpu);
-    std::vector<cv::KeyPoint> keypoints1;
-    detector->downloadKeypoints (keypoints1_gpu, keypoints1);
+    cv::Ptr<SURF> detector = SURF::create (1000);
 
-    cv::cuda::GpuMat keypoints2_gpu, descriptors2_gpu;
-    detector->detectWithDescriptors (img2_gray_gpu, mask2,
-                                    keypoints2_gpu, descriptors2_gpu);
-    std::vector<cv::KeyPoint> keypoints2;
-    detector->downloadKeypoints (keypoints2_gpu, keypoints2);
+    std::vector<KeyPoint> keypoints1, keypoints2;
+    cv::Mat descriptors1, descriptors2;
 
-    cv::Ptr<cv::cuda::DescriptorMatcher> matcher =
-        cv::cuda::DescriptorMatcher::createBFMatcher ();
+    detector->detectAndCompute (img1_gray, mask1, keypoints1, descriptors1);
+    detector->detectAndCompute (img2_gray, mask2, keypoints2, descriptors2);
+
+    cout << "descriptors detected" << endl;
+
+    cv::Ptr<cv::DescriptorMatcher> matcher =
+        cv::DescriptorMatcher::create (DescriptorMatcher::FLANNBASED);
 
     std::vector<std::vector<cv::DMatch>> knn_matches;
-    matcher->knnMatch (descriptors2_gpu, descriptors1_gpu, knn_matches, 2);
+    matcher->knnMatch (descriptors2, descriptors1, knn_matches, 2);
 
     std::vector<cv::DMatch> matches;
     std::vector<std::vector<cv::DMatch>>::const_iterator it;
@@ -159,9 +155,17 @@ cv::Mat combinePair (cv::Mat& img1, cv::Mat& img2) {
         dst_pts.push_back (keypoints1[m.trainIdx].pt);
     }
 
+    cout << "matches found" << endl;
+    cout << "src size: " << src_pts.size() << endl;
+    cout << "dst size: " << dst_pts.size() << endl;
+
     cv::Mat A = cv::estimateRigidTransform(src_pts, dst_pts, false);
+
+    cout << "what the fuck" << endl;
     int height1 = img1.rows, width1 = img1.cols;
     int height2 = img2.rows, width2 = img2.cols;
+
+    cout << "rigid transform" << endl;
 
     std::vector<std::vector<float>> corners1 {{0,0},{0,height1},{width1,height1},{width1,0}};
     std::vector<std::vector<float>> corners2 {{0,0},{0,height2},{width2,height2},{width2,0}};
@@ -179,6 +183,8 @@ cv::Mat combinePair (cv::Mat& img1, cv::Mat& img2) {
         allCorners.push_back (warpedCorners2[i]);
     }
 
+    cout << "warped corners" << endl;
+
     float xMin = 1e9, xMax = -1e9;
     float yMin = 1e9, yMax = -1e9;
     for (int i = 0; i < 7; i++) {
@@ -194,39 +200,42 @@ cv::Mat combinePair (cv::Mat& img1, cv::Mat& img2) {
 
     cv::Mat translation = (cv::Mat_<double>(3,3) << 1, 0, -xMin_, 0, 1, -yMin_, 0, 0, 1);
 
-    cv::cuda::GpuMat warpedResImg;
-    cv::cuda::warpPerspective (img1_gpu, warpedResImg, translation,
-                               cv::Size (xMax_-xMin_, yMax_-yMin_));
+    cout << "tranlation" << endl;
 
-    cv::cuda::GpuMat warpedImageTemp;
-    cv::cuda::warpPerspective (img2_gpu, warpedImageTemp, translation,
-                               cv::Size (xMax_ - xMin_, yMax_ - yMin_));
-    cv::cuda::GpuMat warpedImage2;
-    cv::cuda::warpAffine (warpedImageTemp, warpedImage2, A,
-                          cv::Size (xMax_ - xMin_, yMax_ - yMin_));
+    cv::Mat warpedResImg;
+    cv::warpPerspective (img1, warpedResImg, translation,
+                        cv::Size (xMax_-xMin_, yMax_-yMin_));
 
-    cv::cuda::GpuMat mask;
-    cv::cuda::threshold (warpedImage2, mask, 1, 255, cv::THRESH_BINARY);
+    cout << "warped image1" << endl;
+
+    cv::Mat warpedImageTemp;
+    cv::warpPerspective (img2, warpedImageTemp, translation,
+                        cv::Size (xMax_ - xMin_, yMax_ - yMin_));
+    cv::Mat warpedImage2;
+    cv::warpAffine (warpedImageTemp, warpedImage2, A,
+                    cv::Size (xMax_ - xMin_, yMax_ - yMin_));
+
+    cout << "warped image2" << endl;
+
+    cv::Mat mask;
+    cv::threshold (warpedImage2, mask, 1, 255, cv::THRESH_BINARY);
     int type = warpedResImg.type();
 
     warpedResImg.convertTo (warpedResImg, CV_32FC3);
     warpedImage2.convertTo (warpedImage2, CV_32FC3);
     mask.convertTo (mask, CV_32FC3, 1.0/255);
-    cv::Mat mask_;
-    mask.download (mask_);
 
-    cv::cuda::GpuMat dst (warpedImage2.size(), warpedImage2.type());
-    cv::cuda::multiply (mask, warpedImage2, warpedImage2);
+    cv::Mat dst (warpedImage2.size(), warpedImage2.type());
+    cv::multiply (mask, warpedImage2, warpedImage2);
 
-    cv::Mat diff_ = cv::Scalar::all (1.0) - mask_;
-    cv::cuda::GpuMat diff (diff_);
-    cv::cuda::multiply(diff, warpedResImg, warpedResImg);
-    cv::cuda::add (warpedResImg, warpedImage2, dst);
+    cv::Mat diff = cv::Scalar::all (1.0) - mask;
+    cv::multiply(diff, warpedResImg, warpedResImg);
+    cv::add (warpedResImg, warpedImage2, dst);
     dst.convertTo (dst, type);
 
-    cv::cuda::GpuMat dst_gray;
-    cv::cuda::cvtColor (dst, dst_gray, cv::COLOR_BGR2GRAY);
-    cv::cuda::threshold (dst_gray, prev_mask, 1, 255, cv::THRESH_BINARY);
+    cv::Mat dst_gray;
+    cv::cvtColor (dst, dst_gray, cv::COLOR_BGR2GRAY);
+    cv::threshold (dst_gray, prev_mask, 1, 255, cv::THRESH_BINARY);
 
     float h = prev_mask.rows;
     float w = prev_mask.cols;
@@ -241,12 +250,10 @@ cv::Mat combinePair (cv::Mat& img1, cv::Mat& img2) {
             w = w * wx;
             h = h * wx;
         }
-        cv::cuda::resize (prev_mask, prev_mask, cv::Size (w, h));
+        cv::resize (prev_mask, prev_mask, cv::Size (w, h));
     }
 
-    cv::Mat ret;
-    dst.download (ret);
-    return ret;
+    return dst;
 }
 
 cv::Mat combine (std::vector<cv::Mat>& imageList) {
@@ -311,6 +318,7 @@ void image_cb (const sensor_msgs::ImageConstPtr& msg) {
     cv::Mat image = cv_ptr->image;
     if (result.empty()) {
         result = image;
+        return;
     }
     imageData data = readData ();
     image = changePerspective (image, data);
